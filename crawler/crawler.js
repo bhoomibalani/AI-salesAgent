@@ -5,6 +5,8 @@ const normalizeUrl = require("./normalizer");
 const RobotsManager = require("./robots");
 const score = require("./pageScorer");
 const shouldCrawl = require("./urlFilter");
+const { getSalesSeedUrls } = require("./salesSeeds");
+const { stripLocaleFromUrl } = require("./localePath");
 const isBinary = require("./binaryFilter");
 const getCanonical = require("./canonical");
 const detectRedirect = require("./redirect");
@@ -14,15 +16,35 @@ const cleanPage = require("../cleaner/cleaner");
 
 const MAX_DEPTH = 5;
 
-async function crawl(startUrl, maxPages = 50) {
+async function crawl(startUrl, maxPages = 50, options = {}) {
+
+    const onProgress = typeof options.onProgress === "function"
+        ? options.onProgress
+        : () => {};
 
     const browser = await chromium.launch({
-        headless: false
+        headless: true
+    });
+
+    const context = await browser.newContext({
+        locale: "en-US",
+        extraHTTPHeaders: {
+            "Accept-Language": "en-US,en;q=0.9"
+        }
     });
 
     const scheduler = new Scheduler();
 
     const robots = new RobotsManager();
+
+    await onProgress({
+        stage: "crawling",
+        title: "Opening the company website",
+        detail: "Launching a browser and checking robots.txt…",
+        tip: "We only visit pages that look useful for sales answers.",
+        percent: 2,
+        currentUrl: startUrl
+    });
 
     await robots.load(startUrl);
 
@@ -41,6 +63,26 @@ async function crawl(startUrl, maxPages = 50) {
         priority: 100,
         depth: 0
     });
+
+    for (const seedUrl of getSalesSeedUrls(startUrl)) {
+
+        const normalizedSeed = normalizeUrl(seedUrl);
+
+        if (!normalizedSeed || visited.has(normalizedSeed) || queued.has(normalizedSeed))
+            continue;
+
+        if (!shouldCrawl(normalizedSeed))
+            continue;
+
+        queued.add(normalizedSeed);
+
+        scheduler.add({
+            url: normalizedSeed,
+            priority: score(normalizedSeed),
+            depth: 0
+        });
+
+    }
 
     while (
         !scheduler.isEmpty() &&
@@ -75,7 +117,25 @@ async function crawl(startUrl, maxPages = 50) {
         console.log("Visiting:", normalized);
         console.log("==============================");
 
-        const page = await browser.newPage();
+        const pagesDone = crawledPages.length;
+        const percent = Math.min(
+            8 + Math.round((pagesDone / Math.max(maxPages, 1)) * 55),
+            62
+        );
+
+        await onProgress({
+            stage: "crawling",
+            title: "Browsing the company site",
+            detail: `Visiting page ${pagesDone + 1} of up to ${maxPages}`,
+            tip: "Looking for pricing, products, features, and contact pages.",
+            percent,
+            currentUrl: normalized,
+            pagesDone,
+            pagesTotal: maxPages,
+            log: `Opening ${normalized}`
+        });
+
+        const page = await context.newPage();
 
         try {
 
@@ -86,6 +146,18 @@ async function crawl(startUrl, maxPages = 50) {
                     timeout: 30000
                 }
             );
+
+            // Let SPA/pricing cards finish rendering (Zipply, Stripe, etc.)
+            try {
+
+                await page.waitForFunction(
+                    () => (document.body?.innerText || "").trim().length > 120,
+                    { timeout: 8000 }
+                );
+
+            } catch (_) {}
+
+            await new Promise(resolve => setTimeout(resolve, 1200));
 
             // Redirect Detection
             const redirected = detectRedirect(response);
@@ -105,13 +177,50 @@ async function crawl(startUrl, maxPages = 50) {
 
             }
 
+            // Stripe (and others) geo-redirect /pricing → /in/pricing.
+            // Store the locale-free path so one site ≠ N country clones.
+            if (normalized) {
+
+                normalized = normalizeUrl(stripLocaleFromUrl(normalized));
+
+            }
+
             const extracted = await extractPage(page);
 
             const cleaned = cleanPage(extracted);
 
+            // Browser location stays on geo URL; persist the locale-free one
+            cleaned.url = normalized;
+            if (cleaned.metadata)
+                cleaned.metadata.url = normalized;
+
             crawledPages.push(cleaned);
 
-            console.log("Title:", extracted.metadata.title);
+            const title = extracted.metadata?.title || "Untitled page";
+            const pathLabel = (() => {
+                try {
+                    return new URL(normalized).pathname || "/";
+                } catch (_) {
+                    return normalized;
+                }
+            })();
+
+            console.log("Title:", title);
+
+            await onProgress({
+                stage: "crawling",
+                title: "Extracting page content",
+                detail: `Saved “${title.slice(0, 72)}${title.length > 72 ? "…" : ""}”`,
+                tip: "Pulling headings, paragraphs, and lists — skipping nav chrome.",
+                percent: Math.min(
+                    10 + Math.round((crawledPages.length / Math.max(maxPages, 1)) * 55),
+                    65
+                ),
+                currentUrl: normalized,
+                pagesDone: crawledPages.length,
+                pagesTotal: maxPages,
+                log: `Extracted ${pathLabel} · ${cleaned.headings.length} headings, ${cleaned.paragraphs.length} paragraphs`
+            });
 
             console.log(
                 "Headings:",
@@ -168,7 +277,15 @@ async function crawl(startUrl, maxPages = 50) {
                         continue;
                     }
 
-                    const normalizedLink = normalizeUrl(link);
+                    let normalizedLink = normalizeUrl(link);
+
+                    if (!normalizedLink)
+                        continue;
+
+                    // Queue /pricing instead of /in/pricing
+                    normalizedLink = normalizeUrl(
+                        stripLocaleFromUrl(normalizedLink)
+                    );
 
                     if (!normalizedLink)
                         continue;
