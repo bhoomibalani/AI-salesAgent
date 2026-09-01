@@ -6,8 +6,7 @@ require("dotenv").config({
     path: path.join(__dirname, "..", ".env")
 });
 
-const { answerQuestion } = require("../rag/ragAgent");
-const ragConfig = require("../rag/config");
+const { ask } = require("../rag");
 const { listWebsites, countStats } = require("../database/repository");
 const { ingestWebsite, normalizeStartUrl } = require("../pipeline/ingestWebsite");
 
@@ -276,25 +275,8 @@ app.post("/api/ask", async (req, res) => {
 
     try {
 
-        const startedAt = Date.now();
-        const result = await answerQuestion(question, { domain });
-
-        res.json({
-            question,
-            domain,
-            answer: result.answer,
-            model: result.model,
-            provider: ragConfig.provider,
-            usage: result.usage,
-            elapsedMs: Date.now() - startedAt,
-            sources: (result.chunks || []).map(chunk => ({
-                url: chunk.url,
-                heading: chunk.heading || "",
-                domain: chunk.domain,
-                similarity: Number(chunk.similarity || 0),
-                excerpt: String(chunk.text || "").slice(0, 280)
-            }))
-        });
+        const result = await ask(question, { domain });
+        res.json(result);
 
     } catch (err) {
 

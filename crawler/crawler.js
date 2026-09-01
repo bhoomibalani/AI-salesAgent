@@ -13,8 +13,13 @@ const detectRedirect = require("./redirect");
 
 const extractPage = require("../extractor/extractor");
 const cleanPage = require("../cleaner/cleaner");
+const { isChallengePage, isEmptyContent } = require("./pageGate");
 
 const MAX_DEPTH = 5;
+
+const CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 async function crawl(startUrl, maxPages = 50, options = {}) {
 
@@ -28,8 +33,11 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
 
     const context = await browser.newContext({
         locale: "en-US",
+        userAgent: CHROME_UA,
+        viewport: { width: 1365, height: 900 },
         extraHTTPHeaders: {
-            "Accept-Language": "en-US,en;q=0.9"
+            "Accept-Language": "en-US,en;q=0.9",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
     });
 
@@ -53,6 +61,8 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
     const queued = new Set();
 
     const crawledPages = [];
+
+    let skippedBlocked = 0;
 
     const normalizedStart = normalizeUrl(startUrl);
 
@@ -159,6 +169,29 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
 
             await new Promise(resolve => setTimeout(resolve, 1200));
 
+            // Cloudflare / bot walls often clear after a short JS challenge
+            const earlyTitle = await page.title().catch(() => "");
+
+            if (/just a moment|attention required|checking your browser/i.test(earlyTitle)) {
+
+                console.log("Bot challenge detected — waiting for real page…");
+
+                try {
+
+                    await page.waitForFunction(
+                        () => {
+                            const t = (document.title || "").toLowerCase();
+                            const body = (document.body?.innerText || "").trim();
+                            const blocked = /just a moment|attention required|checking your browser|verify you are human/.test(t);
+                            return !blocked && body.length > 200;
+                        },
+                        { timeout: 15000 }
+                    );
+
+                } catch (_) {}
+
+            }
+
             // Redirect Detection
             const redirected = detectRedirect(response);
 
@@ -194,8 +227,6 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
             if (cleaned.metadata)
                 cleaned.metadata.url = normalized;
 
-            crawledPages.push(cleaned);
-
             const title = extracted.metadata?.title || "Untitled page";
             const pathLabel = (() => {
                 try {
@@ -206,6 +237,33 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
             })();
 
             console.log("Title:", title);
+
+            if (isChallengePage(cleaned) || isEmptyContent(cleaned)) {
+
+                skippedBlocked += 1;
+
+                console.log("Skipped: bot wall or empty page (no crawlable content)");
+
+                await onProgress({
+                    stage: "crawling",
+                    title: "Skipping blocked / empty page",
+                    detail: `No usable content on ${pathLabel}`,
+                    tip: "Sites with Cloudflare bot checks often block headless crawlers.",
+                    percent: Math.min(
+                        10 + Math.round((crawledPages.length / Math.max(maxPages, 1)) * 55),
+                        65
+                    ),
+                    currentUrl: normalized,
+                    pagesDone: crawledPages.length,
+                    pagesTotal: maxPages,
+                    log: `Skipped ${pathLabel} (blocked or empty)`
+                });
+
+                continue;
+
+            }
+
+            crawledPages.push(cleaned);
 
             await onProgress({
                 stage: "crawling",
@@ -366,6 +424,16 @@ async function crawl(startUrl, maxPages = 50, options = {}) {
     }
 
     await browser.close();
+
+    if (!crawledPages.length && skippedBlocked > 0) {
+
+        console.log("\n--------------------------------");
+        console.log(`No usable pages saved (${skippedBlocked} blocked/empty).`);
+        console.log("This site likely uses Cloudflare or another bot check.");
+        console.log("Try a site that allows crawlers, e.g. https://www.zipplyio.com/");
+        console.log("--------------------------------");
+
+    }
 
     return crawledPages;
 

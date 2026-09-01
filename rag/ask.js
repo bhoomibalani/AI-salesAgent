@@ -6,7 +6,7 @@ require("dotenv").config({
 
 const parseSearchArgs = require("../database/parseSearchArgs");
 const { closePool } = require("../database/db");
-const { answerQuestion } = require("./ragAgent");
+const { ask } = require("./index");
 const config = require("./config");
 
 (async () => {
@@ -31,17 +31,17 @@ const config = require("./config");
     console.log("");
     console.log("Thinking...\n");
 
-    const result = await answerQuestion(question, { domain });
+    const result = await ask(question, { domain });
 
-    if (result.chunks.length) {
+    if (result.sources.length) {
 
         console.log("Based on:");
 
-        result.chunks.forEach((chunk, index) => {
+        result.sources.forEach((source, index) => {
 
-            console.log(`  ${index + 1}. ${chunk.url}`);
-            if (chunk.heading)
-                console.log(`     ${chunk.heading}`);
+            console.log(`  ${index + 1}. ${source.url}`);
+            if (source.heading)
+                console.log(`     ${source.heading}`);
 
         });
 
@@ -65,6 +65,8 @@ const config = require("./config");
         );
 
     }
+
+    console.log("Elapsed:", `${result.elapsedMs}ms`);
 
     await closePool();
 

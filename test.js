@@ -1,37 +1,32 @@
-const RobotsParser = require("./crawler/robots");
+require("dotenv").config();
 
-(async () => {
+const { Client } = require("pg");
 
-    const robots = new RobotsParser();
+const client = new Client({
+    connectionString: process.env.DATABASE_URL
+});
 
-   await robots.load("https://openai.com");
+async function test() {
+    try {
+        await client.connect();
 
-    console.log(
+        console.log("✅ Connected to PostgreSQL");
 
-        robots.getRules()
+        const result = await client.query(`
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            ORDER BY table_name;
+        `);
 
-    );
+        console.log("Tables:");
+        console.table(result.rows);
 
-    console.log(
+    } catch (error) {
+        console.error("❌", error.message);
+    } finally {
+        await client.end();
+    }
+}
 
-        robots.getSitemaps()
-
-    );
-
-    console.log(
-
-        robots.getCrawlDelay()
-
-    );
-
-    console.log(
-
-        robots.isAllowed(
-
-            "https://example.com/admin"
-
-        )
-
-    );
-
-})();
+test();
