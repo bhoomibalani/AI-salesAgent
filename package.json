@@ -16,6 +16,7 @@
     "db:list": "node database/list.js",
     "db:search": "node database/search.js",
     "ask": "node rag/ask.js",
+    "server": "node server.js",
     "web": "node web/server.js",
     "demo": "node web/server.js"
   },
@@ -26,6 +27,7 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "axios": "^1.19.0",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.16.3",

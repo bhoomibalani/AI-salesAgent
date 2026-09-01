@@ -37,6 +37,34 @@ async function query(text, params = []) {
 
 }
 
+async function withTransaction(fn) {
+
+    const client = await getPool().connect();
+
+    try {
+
+        await client.query("BEGIN");
+
+        const result = await fn(client);
+
+        await client.query("COMMIT");
+
+        return result;
+
+    } catch (err) {
+
+        await client.query("ROLLBACK");
+
+        throw err;
+
+    } finally {
+
+        client.release();
+
+    }
+
+}
+
 async function initSchema() {
 
     const schemaPath = path.join(__dirname, "schema.sql");
@@ -72,6 +100,7 @@ module.exports = {
 
     getPool,
     query,
+    withTransaction,
     initSchema,
     migrateSchema,
     closePool

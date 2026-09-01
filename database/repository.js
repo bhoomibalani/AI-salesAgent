@@ -1,9 +1,22 @@
-const { query } = require("./db");
+const { query, withTransaction } = require("./db");
 const { rerankSearchResults, detectIntent } = require("./searchRank");
+
+const BATCH_SIZE = 150;
 
 function toVectorLiteral(embedding = []) {
 
     return `[${embedding.join(",")}]`;
+
+}
+
+function chunkArray(items, size = BATCH_SIZE) {
+
+    const batches = [];
+
+    for (let i = 0; i < items.length; i += size)
+        batches.push(items.slice(i, i + size));
+
+    return batches;
 
 }
 
@@ -42,72 +55,97 @@ async function upsertWebsite(startUrl) {
 
 async function upsertPage(websiteId, url, title = "") {
 
-    const result = await query(
+    const pageCache = await upsertPagesBatch(websiteId, [{ url, title: title || "" }]);
+
+    return pageCache.get(url) || null;
+
+}
+
+async function upsertPagesBatch(websiteId, pages, client = null) {
+
+    const run = client ? client.query.bind(client) : query;
+    const pageCache = new Map();
+
+    if (!pages.length)
+        return pageCache;
+
+    // One row per URL — Postgres rejects ON CONFLICT updating the same key twice
+    const byUrl = new Map();
+
+    for (const page of pages) {
+
+        if (!page?.url)
+            continue;
+
+        byUrl.set(page.url, page);
+
+    }
+
+    const uniquePages = [...byUrl.values()];
+    const urls = uniquePages.map(page => page.url);
+    const titles = uniquePages.map(page => page.metadata?.title || page.title || "");
+
+    const result = await run(
         `
         INSERT INTO pages (website_id, url, title, updated_at)
-        VALUES ($1, $2, $3, NOW())
+        SELECT $1, u.url, u.title, NOW()
+        FROM unnest($2::text[], $3::text[]) AS u(url, title)
         ON CONFLICT (url) DO UPDATE SET
             website_id = EXCLUDED.website_id,
             title = EXCLUDED.title,
             updated_at = NOW()
         RETURNING id, url
         `,
-        [websiteId, url, title || ""]
+        [websiteId, urls, titles]
     );
 
-    return result.rows[0];
+    for (const row of result.rows)
+        pageCache.set(row.url, row);
+
+    return pageCache;
 
 }
 
-async function getPageByUrl(url) {
+async function insertChunksBatch(rows, client = null) {
 
-    const result = await query(
-        `SELECT id, url FROM pages WHERE url = $1`,
-        [url]
-    );
+    if (!rows.length)
+        return;
 
-    return result.rows[0] || null;
+    const run = client ? client.query.bind(client) : query;
 
-}
+    // Same chunk id twice in one INSERT → ON CONFLICT error
+    const byId = new Map();
 
-async function saveCrawlResults(startUrl, pages, chunks) {
+    for (const row of rows) {
 
-    const website = await upsertWebsite(startUrl);
-    const pageCache = new Map();
+        if (!row?.id)
+            continue;
 
-    for (const page of pages) {
-
-        const row = await upsertPage(
-            website.id,
-            page.url,
-            page.metadata?.title || ""
-        );
-
-        pageCache.set(page.url, row);
+        byId.set(row.id, row);
 
     }
 
-    await query(
-        `
-        DELETE FROM chunks
-        WHERE page_id IN (
-            SELECT id FROM pages WHERE website_id = $1
-        )
-        `,
-        [website.id]
-    );
+    for (const batch of chunkArray([...byId.values()])) {
 
-    for (const chunk of chunks) {
+        const ids = [];
+        const pageIds = [];
+        const headings = [];
+        const levels = [];
+        const indexes = [];
+        const texts = [];
 
-        let page = pageCache.get(chunk.url);
+        for (const row of batch) {
 
-        if (!page)
-            page = await getPageByUrl(chunk.url);
+            ids.push(row.id);
+            pageIds.push(row.pageId);
+            headings.push(row.heading || "");
+            levels.push(row.level || "");
+            indexes.push(row.chunkIndex ?? 0);
+            texts.push(row.text);
 
-        if (!page)
-            continue;
+        }
 
-        await query(
+        await run(
             `
             INSERT INTO chunks (
                 id,
@@ -117,7 +155,21 @@ async function saveCrawlResults(startUrl, pages, chunks) {
                 chunk_index,
                 text
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            SELECT
+                t.id,
+                t.page_id,
+                t.heading,
+                t.level,
+                t.chunk_index,
+                t.text
+            FROM unnest(
+                $1::text[],
+                $2::int[],
+                $3::text[],
+                $4::text[],
+                $5::int[],
+                $6::text[]
+            ) AS t(id, page_id, heading, level, chunk_index, text)
             ON CONFLICT (id) DO UPDATE SET
                 page_id = EXCLUDED.page_id,
                 heading = EXCLUDED.heading,
@@ -128,17 +180,54 @@ async function saveCrawlResults(startUrl, pages, chunks) {
                 embedding = NULL,
                 embedded_at = NULL
             `,
-            [
-                chunk.id,
-                page.id,
-                chunk.heading || "",
-                chunk.level || "",
-                chunk.chunkIndex ?? 0,
-                chunk.text
-            ]
+            [ids, pageIds, headings, levels, indexes, texts]
         );
 
     }
+
+}
+
+async function saveCrawlResults(startUrl, pages, chunks) {
+
+    const website = await upsertWebsite(startUrl);
+
+    await withTransaction(async client => {
+
+        const pageCache = await upsertPagesBatch(website.id, pages, client);
+
+        await client.query(
+            `
+            DELETE FROM chunks
+            WHERE page_id IN (
+                SELECT id FROM pages WHERE website_id = $1
+            )
+            `,
+            [website.id]
+        );
+
+        const chunkRows = [];
+
+        for (const chunk of chunks) {
+
+            const page = pageCache.get(chunk.url);
+
+            if (!page)
+                continue;
+
+            chunkRows.push({
+                id: chunk.id,
+                pageId: page.id,
+                heading: chunk.heading || "",
+                level: chunk.level || "",
+                chunkIndex: chunk.chunkIndex ?? 0,
+                text: chunk.text
+            });
+
+        }
+
+        await insertChunksBatch(chunkRows, client);
+
+    });
 
     return website;
 
@@ -311,25 +400,45 @@ async function searchSimilar(embedding, limit = 5, domain = null, question = "")
 
 async function updateChunkEmbedding(id, embedding, model) {
 
-    await query(
-        `
-        UPDATE chunks
-        SET
-            model = $2,
-            embedding = $3::vector,
-            embedded_at = NOW()
-        WHERE id = $1
-        `,
-        [id, model, toVectorLiteral(embedding)]
-    );
+    await updateChunkEmbeddings([{ id, embedding }], model);
 
 }
 
 async function updateChunkEmbeddings(items, model) {
 
-    for (const item of items) {
+    if (!items.length)
+        return;
 
-        await updateChunkEmbedding(item.id, item.embedding, model);
+    for (const batch of chunkArray(items)) {
+
+        const ids = [];
+        const models = [];
+        const embeddings = [];
+
+        for (const item of batch) {
+
+            ids.push(item.id);
+            models.push(model);
+            embeddings.push(toVectorLiteral(item.embedding));
+
+        }
+
+        await query(
+            `
+            UPDATE chunks AS c
+            SET
+                model = d.model,
+                embedding = d.embedding::vector,
+                embedded_at = NOW()
+            FROM (
+                SELECT *
+                FROM unnest($1::text[], $2::text[], $3::text[])
+                    AS t(id, model, embedding)
+            ) AS d
+            WHERE c.id = d.id
+            `,
+            [ids, models, embeddings]
+        );
 
     }
 
@@ -368,6 +477,8 @@ module.exports = {
 
     upsertWebsite,
     upsertPage,
+    upsertPagesBatch,
+    insertChunksBatch,
     saveCrawlResults,
     listWebsites,
     getChunksWithoutEmbeddings,

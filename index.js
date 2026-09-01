@@ -38,6 +38,15 @@ const { saveCrawlResults, countStats, listWebsites } = require("./database/repos
     console.log("--------------------------------");
     console.log("Pages Crawled :", pages.length);
 
+    if (!pages.length) {
+
+        console.error("\nNo pages with real content were crawled.");
+        console.error("Chunks cannot be created from empty/blocked pages.");
+        console.error("Tip: openai.com often blocks bots — try https://www.zipplyio.com/ or https://stripe.com");
+        process.exit(1);
+
+    }
+
     console.log("\n--------------------------------");
     console.log("Chunking + saving to PostgreSQL...");
     console.log("--------------------------------");
@@ -53,6 +62,14 @@ const { saveCrawlResults, countStats, listWebsites } = require("./database/repos
         const chunks = chunkPage(cleaned);
 
         allChunks.push(...chunks);
+
+    }
+
+    if (!allChunks.length) {
+
+        console.error("\nCrawl returned pages but produced 0 chunks.");
+        console.error("Extraction/cleaning left no paragraph text to chunk.");
+        process.exit(1);
 
     }
 
@@ -103,3 +120,5 @@ const { saveCrawlResults, countStats, listWebsites } = require("./database/repos
     process.exit(1);
 
 });
+
+//bhoomi123balani
