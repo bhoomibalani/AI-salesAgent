@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "embed": "node embeddings/generate.js",
     "db:up": "node database/docker.js up",
@@ -17,8 +18,8 @@
     "db:search": "node database/search.js",
     "ask": "node rag/ask.js",
     "server": "node server.js",
-    "web": "node web/server.js",
-    "demo": "node web/server.js"
+    "web": "node server.js",
+    "demo": "node server.js"
   },
   "keywords": [],
   "author": "",

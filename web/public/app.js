@@ -177,33 +177,41 @@ async function readJson(res) {
 
   if (!type.includes("application/json")) {
     throw new Error(
-      "Server returned a webpage instead of API data. Run `npm run web` and open http://localhost:3000 (keep that terminal open)."
+      "Server returned a webpage instead of API data. Restart the app with `npm start` and open the same origin."
     );
   }
 
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Server returned invalid JSON. Restart `npm run web` and try again.");
+    throw new Error("Server returned invalid JSON. Restart with `npm start` and try again.");
   }
 }
 
 async function loadHealth() {
   try {
-    const res = await fetch("/api/health");
+    const res = await fetch("/health");
     const data = await readJson(res);
 
-    if (!res.ok || !data.ok) {
+    if (!res.ok || data.ok === false || data.status === "error") {
       setStatus(false, data.error || "DB offline");
-      metaHint.textContent = data.hint || "Start Postgres with npm run db:up";
+      metaHint.textContent = data.hint || "Check DATABASE_URL / database connectivity";
       return;
     }
 
-    setStatus(true, `${data.provider} · ${data.stats.embedded} embedded chunks`);
-    metaHint.textContent = `${data.stats.websites} sites · ${data.stats.pages} pages · ${data.stats.chunks} chunks`;
+    const embedded = data.stats?.embedded;
+    const provider = data.provider || "rag";
+
+    if (typeof embedded === "number") {
+      setStatus(true, `${provider} · ${embedded} embedded chunks`);
+      metaHint.textContent = `${data.stats.websites} sites · ${data.stats.pages} pages · ${data.stats.chunks} chunks`;
+    } else {
+      setStatus(true, "API online");
+      metaHint.textContent = "Answers stay tied to crawled pages.";
+    }
   } catch (err) {
     setStatus(false, "Server unreachable");
-    metaHint.textContent = err.message || "Run npm run web";
+    metaHint.textContent = err.message || "Run npm start";
   }
 }
 
@@ -295,6 +303,12 @@ async function ingestWebsite() {
       body: JSON.stringify({ url, maxPages: 30 })
     });
 
+    if (res.status === 404) {
+      throw new Error(
+        "Learn-site ingest is not enabled on this server. Crawl locally (`node index.js <url>` + `npm run embed`), then ask here."
+      );
+    }
+
     const data = await readJson(res);
 
     if (!res.ok) {
@@ -365,7 +379,7 @@ async function askQuestion() {
   ];
 
   try {
-    const res = await fetch("/api/ask", {
+    const res = await fetch("/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question, domain })
