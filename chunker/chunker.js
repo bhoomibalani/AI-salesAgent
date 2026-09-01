@@ -17,13 +17,28 @@ function chunkPage(page) {
 
     const chunks = [];
 
-    if (!page.sections || page.sections.length === 0) {
+    let sections = page.sections || [];
 
-        return chunks;
+    // SPA pages (e.g. pricing cards) may have paragraphs but no sections
+    if (!sections.length) {
+
+        const paragraphs = (page.paragraphs || []).filter(Boolean);
+
+        if (!paragraphs.length)
+            return chunks;
+
+        sections = [{
+            heading: page.metadata?.title || "Overview",
+            level: "H1",
+            paragraphs,
+            lists: page.lists || [],
+            tables: page.tables || [],
+            buttons: (page.buttons || []).map(b => b.text || b).filter(Boolean)
+        }];
 
     }
 
-    for (const section of page.sections) {
+    for (const section of sections) {
 
         const paragraphChunks = splitParagraphs(
 
@@ -55,42 +70,45 @@ function chunkPage(page) {
             // Paragraphs
             content.push(...paragraphs);
 
-            // Lists
-            if (section.lists && section.lists.length) {
+            // Attach lists/tables/buttons only once per section
+            // so nav leftovers are not repeated across overlap chunks
+            if (index === 0) {
 
-                content.push("\nLists:");
+                if (section.lists && section.lists.length) {
 
-                section.lists.forEach(list => {
+                    content.push("\nLists:");
 
-                    list.forEach(item => {
+                    section.lists.forEach(list => {
 
-                        content.push(`• ${item}`);
+                        list.forEach(item => {
+
+                            content.push(`• ${item}`);
+
+                        });
 
                     });
 
-                });
+                }
 
-            }
+                if (section.tables && section.tables.length) {
 
-            // Tables
-            if (section.tables && section.tables.length) {
+                    content.push("\nTables:");
 
-                content.push("\nTables:");
+                    content.push(formatTables(section.tables));
 
-                content.push(formatTables(section.tables));
+                }
 
-            }
+                if (section.buttons && section.buttons.length) {
 
-            // Buttons
-            if (section.buttons && section.buttons.length) {
+                    content.push("\nButtons:");
 
-                content.push("\nButtons:");
+                    section.buttons.forEach(button => {
 
-                section.buttons.forEach(button => {
+                        content.push(`Button: ${button}`);
 
-                    content.push(`Button: ${button}`);
+                    });
 
-                });
+                }
 
             }
 

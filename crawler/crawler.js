@@ -5,24 +5,54 @@ const normalizeUrl = require("./normalizer");
 const RobotsManager = require("./robots");
 const score = require("./pageScorer");
 const shouldCrawl = require("./urlFilter");
+const { getSalesSeedUrls } = require("./salesSeeds");
+const { stripLocaleFromUrl } = require("./localePath");
 const isBinary = require("./binaryFilter");
 const getCanonical = require("./canonical");
 const detectRedirect = require("./redirect");
 
 const extractPage = require("../extractor/extractor");
 const cleanPage = require("../cleaner/cleaner");
+const { isChallengePage, isEmptyContent } = require("./pageGate");
 
 const MAX_DEPTH = 5;
 
-async function crawl(startUrl, maxPages = 50) {
+const CHROME_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+async function crawl(startUrl, maxPages = 50, options = {}) {
+
+    const onProgress = typeof options.onProgress === "function"
+        ? options.onProgress
+        : () => {};
 
     const browser = await chromium.launch({
-        headless: false
+        headless: true
+    });
+
+    const context = await browser.newContext({
+        locale: "en-US",
+        userAgent: CHROME_UA,
+        viewport: { width: 1365, height: 900 },
+        extraHTTPHeaders: {
+            "Accept-Language": "en-US,en;q=0.9",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
     });
 
     const scheduler = new Scheduler();
 
     const robots = new RobotsManager();
+
+    await onProgress({
+        stage: "crawling",
+        title: "Opening the company website",
+        detail: "Launching a browser and checking robots.txt…",
+        tip: "We only visit pages that look useful for sales answers.",
+        percent: 2,
+        currentUrl: startUrl
+    });
 
     await robots.load(startUrl);
 
@@ -31,6 +61,8 @@ async function crawl(startUrl, maxPages = 50) {
     const queued = new Set();
 
     const crawledPages = [];
+
+    let skippedBlocked = 0;
 
     const normalizedStart = normalizeUrl(startUrl);
 
@@ -41,6 +73,26 @@ async function crawl(startUrl, maxPages = 50) {
         priority: 100,
         depth: 0
     });
+
+    for (const seedUrl of getSalesSeedUrls(startUrl)) {
+
+        const normalizedSeed = normalizeUrl(seedUrl);
+
+        if (!normalizedSeed || visited.has(normalizedSeed) || queued.has(normalizedSeed))
+            continue;
+
+        if (!shouldCrawl(normalizedSeed))
+            continue;
+
+        queued.add(normalizedSeed);
+
+        scheduler.add({
+            url: normalizedSeed,
+            priority: score(normalizedSeed),
+            depth: 0
+        });
+
+    }
 
     while (
         !scheduler.isEmpty() &&
@@ -75,7 +127,25 @@ async function crawl(startUrl, maxPages = 50) {
         console.log("Visiting:", normalized);
         console.log("==============================");
 
-        const page = await browser.newPage();
+        const pagesDone = crawledPages.length;
+        const percent = Math.min(
+            8 + Math.round((pagesDone / Math.max(maxPages, 1)) * 55),
+            62
+        );
+
+        await onProgress({
+            stage: "crawling",
+            title: "Browsing the company site",
+            detail: `Visiting page ${pagesDone + 1} of up to ${maxPages}`,
+            tip: "Looking for pricing, products, features, and contact pages.",
+            percent,
+            currentUrl: normalized,
+            pagesDone,
+            pagesTotal: maxPages,
+            log: `Opening ${normalized}`
+        });
+
+        const page = await context.newPage();
 
         try {
 
@@ -86,6 +156,41 @@ async function crawl(startUrl, maxPages = 50) {
                     timeout: 30000
                 }
             );
+
+            // Let SPA/pricing cards finish rendering (Zipply, Stripe, etc.)
+            try {
+
+                await page.waitForFunction(
+                    () => (document.body?.innerText || "").trim().length > 120,
+                    { timeout: 8000 }
+                );
+
+            } catch (_) {}
+
+            await new Promise(resolve => setTimeout(resolve, 1200));
+
+            // Cloudflare / bot walls often clear after a short JS challenge
+            const earlyTitle = await page.title().catch(() => "");
+
+            if (/just a moment|attention required|checking your browser/i.test(earlyTitle)) {
+
+                console.log("Bot challenge detected — waiting for real page…");
+
+                try {
+
+                    await page.waitForFunction(
+                        () => {
+                            const t = (document.title || "").toLowerCase();
+                            const body = (document.body?.innerText || "").trim();
+                            const blocked = /just a moment|attention required|checking your browser|verify you are human/.test(t);
+                            return !blocked && body.length > 200;
+                        },
+                        { timeout: 15000 }
+                    );
+
+                } catch (_) {}
+
+            }
 
             // Redirect Detection
             const redirected = detectRedirect(response);
@@ -105,13 +210,75 @@ async function crawl(startUrl, maxPages = 50) {
 
             }
 
+            // Stripe (and others) geo-redirect /pricing → /in/pricing.
+            // Store the locale-free path so one site ≠ N country clones.
+            if (normalized) {
+
+                normalized = normalizeUrl(stripLocaleFromUrl(normalized));
+
+            }
+
             const extracted = await extractPage(page);
 
             const cleaned = cleanPage(extracted);
 
+            // Browser location stays on geo URL; persist the locale-free one
+            cleaned.url = normalized;
+            if (cleaned.metadata)
+                cleaned.metadata.url = normalized;
+
+            const title = extracted.metadata?.title || "Untitled page";
+            const pathLabel = (() => {
+                try {
+                    return new URL(normalized).pathname || "/";
+                } catch (_) {
+                    return normalized;
+                }
+            })();
+
+            console.log("Title:", title);
+
+            if (isChallengePage(cleaned) || isEmptyContent(cleaned)) {
+
+                skippedBlocked += 1;
+
+                console.log("Skipped: bot wall or empty page (no crawlable content)");
+
+                await onProgress({
+                    stage: "crawling",
+                    title: "Skipping blocked / empty page",
+                    detail: `No usable content on ${pathLabel}`,
+                    tip: "Sites with Cloudflare bot checks often block headless crawlers.",
+                    percent: Math.min(
+                        10 + Math.round((crawledPages.length / Math.max(maxPages, 1)) * 55),
+                        65
+                    ),
+                    currentUrl: normalized,
+                    pagesDone: crawledPages.length,
+                    pagesTotal: maxPages,
+                    log: `Skipped ${pathLabel} (blocked or empty)`
+                });
+
+                continue;
+
+            }
+
             crawledPages.push(cleaned);
 
-            console.log("Title:", extracted.metadata.title);
+            await onProgress({
+                stage: "crawling",
+                title: "Extracting page content",
+                detail: `Saved “${title.slice(0, 72)}${title.length > 72 ? "…" : ""}”`,
+                tip: "Pulling headings, paragraphs, and lists — skipping nav chrome.",
+                percent: Math.min(
+                    10 + Math.round((crawledPages.length / Math.max(maxPages, 1)) * 55),
+                    65
+                ),
+                currentUrl: normalized,
+                pagesDone: crawledPages.length,
+                pagesTotal: maxPages,
+                log: `Extracted ${pathLabel} · ${cleaned.headings.length} headings, ${cleaned.paragraphs.length} paragraphs`
+            });
 
             console.log(
                 "Headings:",
@@ -168,7 +335,15 @@ async function crawl(startUrl, maxPages = 50) {
                         continue;
                     }
 
-                    const normalizedLink = normalizeUrl(link);
+                    let normalizedLink = normalizeUrl(link);
+
+                    if (!normalizedLink)
+                        continue;
+
+                    // Queue /pricing instead of /in/pricing
+                    normalizedLink = normalizeUrl(
+                        stripLocaleFromUrl(normalizedLink)
+                    );
 
                     if (!normalizedLink)
                         continue;
@@ -249,6 +424,16 @@ async function crawl(startUrl, maxPages = 50) {
     }
 
     await browser.close();
+
+    if (!crawledPages.length && skippedBlocked > 0) {
+
+        console.log("\n--------------------------------");
+        console.log(`No usable pages saved (${skippedBlocked} blocked/empty).`);
+        console.log("This site likely uses Cloudflare or another bot check.");
+        console.log("Try a site that allows crawlers, e.g. https://www.zipplyio.com/");
+        console.log("--------------------------------");
+
+    }
 
     return crawledPages;
 

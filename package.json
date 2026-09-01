@@ -3,14 +3,34 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "embed": "node embeddings/generate.js",
+    "db:up": "node database/docker.js up",
+    "db:down": "node database/docker.js down",
+    "db:remove": "node database/docker.js remove",
+    "db:reset": "node database/docker.js reset",
+    "db:test": "node database/test-connection.js",
+    "db:init": "node database/init.js",
+    "db:migrate": "node database/migrate.js",
+    "db:setup": "npm run db:up && npm run db:init",
+    "db:list": "node database/list.js",
+    "db:search": "node database/search.js",
+    "ask": "node rag/ask.js",
+    "server": "node server.js",
+    "web": "node web/server.js",
+    "demo": "node web/server.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "axios": "^1.18.1",
+    "@huggingface/transformers": "^4.2.0",
+    "axios": "^1.19.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.16.3",
     "playwright": "^1.61.1",
     "robots-parser": "^3.0.1"
   }

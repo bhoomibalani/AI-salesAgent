@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sales Agent — Demo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <p class="brand-name">Sales Agent</p>
+        <p class="brand-sub">Website knowledge → grounded answers</p>
+      </div>
+    </div>
+    <div class="status" id="statusPill">
+      <span class="status-dot"></span>
+      <span id="statusText">Checking…</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="hero-panel">
+      <p class="kicker">Live demo</p>
+      <h1>Ask anything about a crawled company site.</h1>
+      <p class="lede">
+        This UI runs the same pipeline you built: retrieve relevant website excerpts,
+        then answer only from that context.
+      </p>
+
+      <ol class="pipeline" id="pipeline">
+        <li data-step="retrieve"><span>1</span> Retrieve</li>
+        <li data-step="ground"><span>2</span> Ground</li>
+        <li data-step="answer"><span>3</span> Answer</li>
+      </ol>
+
+      <div class="ingest-box">
+        <div class="ingest-head">
+          <h2>Add a website</h2>
+          <p>Paste any company URL. We’ll crawl, chunk, embed, then you can ask questions.</p>
+        </div>
+
+        <div class="ingest-row">
+          <label class="field grow">
+            <span>Website URL</span>
+            <input id="urlInput" type="url" placeholder="https://stripe.com" autocomplete="url" />
+          </label>
+          <button type="button" id="ingestBtn" class="btn secondary">Learn site</button>
+        </div>
+
+        <p class="ingest-status" id="ingestStatus">Example: https://openai.com or stripe.com</p>
+      </div>
+
+      <div class="ask-box">
+        <label class="field">
+          <span>Website in knowledge base</span>
+          <select id="domainSelect">
+            <option value="">Loading sites…</option>
+          </select>
+        </label>
+
+        <label class="field grow">
+          <span>Question</span>
+          <textarea id="questionInput" rows="3" placeholder="What services do you offer?"></textarea>
+        </label>
+
+        <div class="ask-actions">
+          <button type="button" id="askBtn" class="btn primary">Ask</button>
+          <p class="hint" id="metaHint">Answers stay tied to crawled pages.</p>
+        </div>
+      </div>
+
+      <div class="samples" id="samples">
+        <button type="button" data-q="What services do you offer?">Services</button>
+        <button type="button" data-q="What are your pricing plans?">Pricing</button>
+        <button type="button" data-q="Do you offer discounts?">Discounts</button>
+        <button type="button" data-q="How can I contact sales?">Contact</button>
+      </div>
+    </section>
+
+    <section class="result-panel" id="resultPanel" aria-live="polite">
+      <div class="empty" id="emptyState">
+        <h2>Ready when you are</h2>
+        <p>Add a website URL above, or pick a domain you already crawled, then ask a sales question.</p>
+      </div>
+
+      <div class="progress-panel hidden" id="progressPanel">
+        <div class="progress-head">
+          <div>
+            <p class="progress-kicker" id="progressStage">Learning site</p>
+            <h2 id="progressTitle">Getting ready</h2>
+            <p class="progress-detail" id="progressDetail">Preparing to browse the company website…</p>
+          </div>
+          <div class="progress-percent" id="progressPercent">0%</div>
+        </div>
+
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+
+        <ol class="learn-steps" id="learnSteps">
+          <li data-stage="crawling">Browse site</li>
+          <li data-stage="chunking">Extract &amp; chunk</li>
+          <li data-stage="saving">Save</li>
+          <li data-stage="embedding">Embed</li>
+          <li data-stage="done">Ready</li>
+        </ol>
+
+        <p class="progress-tip" id="progressTip">We’ll show live updates so you can follow along.</p>
+        <p class="progress-url" id="progressUrl"></p>
+
+        <div class="progress-log-wrap">
+          <p class="progress-log-label">Live activity</p>
+          <ul class="progress-log" id="progressLog"></ul>
+        </div>
+      </div>
+
+      <div class="result hidden" id="resultState">
+        <div class="answer-block">
+          <div class="answer-head">
+            <h2>Answer</h2>
+            <p class="answer-meta" id="answerMeta"></p>
+          </div>
+          <div class="answer-body" id="answerBody"></div>
+        </div>
+
+        <div class="sources-block">
+          <h3>Sources used</h3>
+          <p class="sources-note">These excerpts came from the vector search step — useful when explaining RAG.</p>
+          <div class="sources" id="sourcesList"></div>
+        </div>
+      </div>
+
+      <div class="error hidden" id="errorState"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Crawl → chunk → embed → retrieve → Gemini answer</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
