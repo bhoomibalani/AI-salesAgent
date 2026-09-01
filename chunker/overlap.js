@@ -1,7 +1,9 @@
-function addOverlap(chunks, overlapChars = 150) {
+function addOverlap(chunks, overlapParagraphs = 1) {
 
-    if (chunks.length <= 1)
+    if (!Array.isArray(chunks) || chunks.length <= 1)
         return chunks;
+
+    const count = Math.max(0, overlapParagraphs);
 
     const result = [chunks[0]];
 
@@ -10,9 +12,9 @@ function addOverlap(chunks, overlapChars = 150) {
         const previous = chunks[i - 1];
         const current = chunks[i];
 
-        const overlap = previous.slice(-overlapChars);
+        const overlap = previous.slice(-count);
 
-        result.push(overlap + "\n\n" + current);
+        result.push([...overlap, ...current]);
 
     }
 

@@ -1,3 +1,5 @@
+const { isNoise, isNavList, cleanListItems, stripChromeSuffix } = require("../cleaner/boilerplate");
+
 function extractSections(elements = []) {
 
     const sections = [];
@@ -9,9 +11,14 @@ function extractSections(elements = []) {
         // New section starts at every heading
         if (element.type === "heading") {
 
+            const heading = stripChromeSuffix(element.text || "");
+
+            if (!heading || isNoise(heading))
+                continue;
+
             currentSection = {
 
-                heading: element.text,
+                heading,
 
                 level: element.level,
 
@@ -36,17 +43,27 @@ function extractSections(elements = []) {
 
         switch (element.type) {
 
-            case "paragraph":
+            case "paragraph": {
 
-                currentSection.paragraphs.push(element.text);
+                const text = stripChromeSuffix(element.text || "");
+
+                if (text && !isNoise(text))
+                    currentSection.paragraphs.push(text);
+
+                break;
+
+            }
+
+            case "list": {
+
+                const items = cleanListItems(element.items || []);
+
+                if (items.length && !isNavList(items))
+                    currentSection.lists.push(items);
 
                 break;
 
-            case "list":
-
-                currentSection.lists.push(element.items);
-
-                break;
+            }
 
             case "table":
 
@@ -54,11 +71,16 @@ function extractSections(elements = []) {
 
                 break;
 
-            case "button":
+            case "button": {
 
-                currentSection.buttons.push(element.text);
+                const text = stripChromeSuffix(element.text || "");
+
+                if (text && !isNoise(text))
+                    currentSection.buttons.push(text);
 
                 break;
+
+            }
 
             default:
 
