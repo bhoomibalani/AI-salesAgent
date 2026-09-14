@@ -4,6 +4,8 @@ const domainSelect = document.getElementById("domainSelect");
 const questionInput = document.getElementById("questionInput");
 const urlInput = document.getElementById("urlInput");
 const askBtn = document.getElementById("askBtn");
+const micBtn = document.getElementById("micBtn");
+const micBtnLabel = document.getElementById("micBtnLabel");
 const ingestBtn = document.getElementById("ingestBtn");
 const ingestStatus = document.getElementById("ingestStatus");
 const metaHint = document.getElementById("metaHint");
@@ -137,22 +139,45 @@ function showResult(payload) {
 
   if (!payload.sources?.length) {
     sourcesList.innerHTML = `<p class="sources-note">No sources passed the similarity threshold.</p>`;
-    return;
+  } else {
+    payload.sources.forEach((source) => {
+      const el = document.createElement("article");
+      el.className = "source";
+      el.innerHTML = `
+        <div class="source-top">
+          <a href="${escapeAttr(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.url)}</a>
+          <span class="score">${Number(source.similarity || 0).toFixed(3)}</span>
+        </div>
+        ${source.heading ? `<p class="source-heading">${escapeHtml(source.heading)}</p>` : ""}
+        <p class="source-excerpt">${escapeHtml(source.excerpt || "")}${source.excerpt?.length >= 280 ? "…" : ""}</p>
+      `;
+      sourcesList.appendChild(el);
+    });
   }
 
-  payload.sources.forEach((source) => {
-    const el = document.createElement("article");
-    el.className = "source";
-    el.innerHTML = `
-      <div class="source-top">
-        <a href="${escapeAttr(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.url)}</a>
-        <span class="score">${Number(source.similarity || 0).toFixed(3)}</span>
-      </div>
-      ${source.heading ? `<p class="source-heading">${escapeHtml(source.heading)}</p>` : ""}
-      <p class="source-excerpt">${escapeHtml(source.excerpt || "")}${source.excerpt?.length >= 280 ? "…" : ""}</p>
-    `;
-    sourcesList.appendChild(el);
-  });
+  // Speak the answer aloud (browser TTS — does not change RAG)
+  speakAnswer(payload.answer || "");
+}
+
+function stopSpeaking() {
+  if (window.speechSynthesis)
+    window.speechSynthesis.cancel();
+}
+
+function speakAnswer(text) {
+  const spoken = String(text || "").trim();
+
+  if (!spoken || !window.speechSynthesis)
+    return;
+
+  stopSpeaking();
+
+  const utterance = new SpeechSynthesisUtterance(spoken);
+  utterance.lang = "en-US";
+  utterance.rate = 1;
+  utterance.pitch = 1;
+
+  window.speechSynthesis.speak(utterance);
 }
 
 function escapeHtml(value) {
@@ -359,7 +384,9 @@ async function askQuestion() {
   }
 
   askBtn.disabled = true;
+  micBtn.disabled = true;
   askBtn.textContent = "Thinking…";
+  stopSpeaking();
   setPipeline("retrieve");
   progressPanel.classList.add("hidden");
   emptyState.classList.remove("hidden");
@@ -401,6 +428,7 @@ async function askQuestion() {
     showError(err.message || "Network error");
   } finally {
     askBtn.disabled = false;
+    micBtn.disabled = false;
     askBtn.textContent = "Ask";
   }
 }
@@ -414,6 +442,127 @@ samples.addEventListener("click", (event) => {
 
 askBtn.addEventListener("click", askQuestion);
 ingestBtn.addEventListener("click", ingestWebsite);
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let listening = false;
+
+function setMicListening(on) {
+  listening = on;
+  micBtn.classList.toggle("listening", on);
+  micBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  micBtnLabel.textContent = on ? "Listening…" : "Mic";
+  micBtn.title = on ? "Stop listening" : "Speak your question";
+}
+
+function stopListening() {
+  if (recognition && listening) {
+    try {
+      recognition.stop();
+    } catch (_) {}
+  }
+  setMicListening(false);
+}
+
+function showHeardQuestion(text) {
+  const heard = String(text || "").trim();
+
+  if (!heard)
+    return;
+
+  questionInput.value = heard;
+  questionInput.dispatchEvent(new Event("input", { bubbles: true }));
+  questionInput.focus();
+
+  const len = questionInput.value.length;
+  questionInput.setSelectionRange(len, len);
+
+  metaHint.textContent = `Heard: “${heard}”`;
+}
+
+function startListening() {
+  if (!SpeechRecognition) {
+    showError("Voice input needs Chrome or Edge (Speech Recognition is not supported in this browser).");
+    return;
+  }
+
+  stopSpeaking();
+
+  if (!recognition) {
+    recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setMicListening(true);
+      metaHint.textContent = "Listening… speak your sales question.";
+    };
+
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interimText = "";
+
+      for (let i = 0; i < event.results.length; i++) {
+        const piece = event.results[i][0].transcript;
+
+        if (event.results[i].isFinal)
+          finalText += piece;
+        else
+          interimText += piece;
+      }
+
+      const visible = `${finalText}${interimText}`.trim();
+      showHeardQuestion(visible);
+
+      if (event.results[event.results.length - 1]?.isFinal && finalText.trim()) {
+        showHeardQuestion(finalText.trim());
+        stopListening();
+        // Same Ask path as the button — RAG flow untouched
+        askQuestion();
+      }
+    };
+
+    recognition.onerror = (event) => {
+      setMicListening(false);
+
+      if (event.error === "aborted" || event.error === "no-speech")
+        return;
+
+      if (event.error === "not-allowed") {
+        showError("Microphone permission was blocked. Allow mic access and try again.");
+        return;
+      }
+
+      showError(`Voice input failed: ${event.error}`);
+    };
+
+    recognition.onend = () => {
+      setMicListening(false);
+
+      const leftover = questionInput.value.trim();
+
+      if (leftover)
+        metaHint.textContent = `Heard: “${leftover}”`;
+    };
+  }
+
+  try {
+    recognition.start();
+  } catch (_) {
+    // Already started
+  }
+}
+
+micBtn.addEventListener("click", () => {
+  if (listening) {
+    stopListening();
+    return;
+  }
+
+  startListening();
+});
 
 urlInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {

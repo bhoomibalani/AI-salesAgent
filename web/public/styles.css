@@ -505,6 +505,37 @@ h1 {
   transform: translateY(-1px);
 }
 
+.btn.mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--accent-deep);
+  border: 1px solid rgba(15, 118, 110, 0.28);
+  box-shadow: none;
+}
+
+.btn.mic:hover:not(:disabled) {
+  background: rgba(15, 118, 110, 0.14);
+  transform: translateY(-1px);
+}
+
+.btn.mic.listening {
+  background: rgba(185, 28, 28, 0.1);
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.35);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.btn.mic .mic-icon {
+  flex-shrink: 0;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(185, 28, 28, 0.25); }
+  50% { box-shadow: 0 0 0 8px rgba(185, 28, 28, 0); }
+}
+
 .btn:disabled {
   opacity: 0.6;
   cursor: wait;
